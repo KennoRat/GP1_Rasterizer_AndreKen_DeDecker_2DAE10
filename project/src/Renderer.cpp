@@ -22,7 +22,8 @@ Renderer::Renderer(SDL_Window* pWindow) :
 	m_pBackBuffer = SDL_CreateRGBSurface(0, m_Width, m_Height, 32, 0, 0, 0, 0);
 	m_pBackBufferPixels = (uint32_t*)m_pBackBuffer->pixels;
 
-	//m_pDepthBufferPixels = new float[m_Width * m_Height];
+	m_pDepthBufferPixels = new float[m_Width * m_Height];
+
 
 	//Initialize Camera
 	m_Camera.Initialize(60.f, { .0f,.0f,-10.f });
@@ -45,25 +46,72 @@ void Renderer::Render()
 	SDL_LockSurface(m_pBackBuffer);
 
 	//Cleat Backbuffer
-	Uint32 clearColor = SDL_MapRGB(m_pBackBuffer->format, 100, 100, 100);
+	Uint32 clearColor = SDL_MapRGB(m_pBackBuffer->format, 0, 0, 0);
 	SDL_FillRect(m_pBackBuffer, NULL, clearColor);
 
 	//Depth Buffer
-	std::vector <float> depthBuffer(m_Width * m_Height, std::numeric_limits<float>::max());
+	std::fill(m_pDepthBufferPixels, m_pDepthBufferPixels + m_Width * m_Height, std::numeric_limits<float>::max());
+
+	//Texture;
+	Texture* m_ptrTexture = Texture::LoadFromFile("resources/uv_grid_2.png");
 
 	//WorldSpace
-	std::vector<Vertex> vertices_world
+	std::vector<Mesh> meshes_world
 	{
-		//Traingle 0
-		{Vector3{0.0f, 2.0f, 0.0f}, colors::Red },
-		{Vector3{1.5f, -1.0f, 0.0f}, colors::Red},
-		{Vector3{-1.5f, -1.0f, 0.0f}, colors::Red},
-
-		//Triangle 1
-		{Vector3{0.0f, 4.0f, 2.0f}, colors::Red },
-		{Vector3{3.0f, -2.0f, 2.0f}, colors::Green},
-		{Vector3{-3.0f, -2.0f, 2.0f}, colors::Blue}
+		Mesh
+		{
+		{
+			//Vertexes
+			{Vector3{-3, 3, -2}, colors::White	, Vector2{0.0f, 0.0f}},
+			{Vector3{0, 3, -2	}, colors::White, Vector2{0.5f, 0.0f}},
+			{Vector3{3, 3, -2	}, colors::White, Vector2{1.0f, 0.0f}},
+			{Vector3{-3, 0, -2	}, colors::White, Vector2{0.0f, 0.5F}},
+			{Vector3{0, 0, -2	}, colors::White, Vector2{0.5f, 0.5f}},
+			{Vector3{3, 0, -2	}, colors::White, Vector2{1.0f, 0.5f}},
+			{Vector3{-3, -3, -2}, colors::White	, Vector2{0.0f, 1.0f}},
+			{Vector3{0, -3, -2	}, colors::White, Vector2{0.5f, 1.0f}},
+			{Vector3{3, -3, -2	}, colors::White, Vector2{1.0f, 1.0f}}
+		},
+		{
+			//Indices
+			3,0,4,1,5,2,
+			2,6, //degenerate triangles
+			6,3,7,4,8,5
+		},
+		PrimitiveTopology::TriangleStrip
+		}
 	};
+
+	//std::vector<Mesh> meshes_world
+	//{
+	//	Mesh
+	//	{
+	//	{
+	//		//Vertexes
+	//		{Vector3{-3, 3, -2}, colors::White},
+	//		{Vector3{0, 3, -2	}, colors::White},
+	//		{Vector3{3, 3, -2	}, colors::White},
+	//		{Vector3{-3, 0, -2	}, colors::White},
+	//		{Vector3{0, 0, -2	}, colors::White},
+	//		{Vector3{3, 0, -2	}, colors::White},
+	//		{Vector3{-3, -3, -2}, colors::White},
+	//		{Vector3{0, -3, -2	}, colors::White},
+	//		{Vector3{3, -3, -2	}, colors::White}
+	//	},
+	//	{
+	//		//Indices
+	//		3,0,1, 1,4,3, 4,1,2,
+	//		2,5,4, 6,3,4, 4,7,6,
+	//		7,4,5, 5,8,7
+	//	},
+	//		PrimitiveTopology::TriangleList
+	//	}
+	//};
+
+	std::vector<Vertex> vertices_world(100);
+
+	//Index Buffer List or Strip
+	IndexBuffer(vertices_world, meshes_world);
 
 	//ViewSpace
 	std::vector<Vertex> vertices_vp(vertices_world.size());
@@ -77,6 +125,7 @@ void Renderer::Render()
 		vertices_sp[i].position.y = ((1 - vertices_vp[i].position.y) / 2.f) * float(m_Height);
 		vertices_sp[i].position.z = vertices_vp[i].position.z;
 		vertices_sp[i].color = vertices_vp[i].color;
+		vertices_sp[i].uv = vertices_vp[i].uv;
 	}
 
 	//Bounding Boxes
@@ -109,21 +158,28 @@ void Renderer::Render()
 				//Triangle Hit Test and Barycentric Coordinates
 				if (TriangleHitTest(vertices_sp, weights, a_parallelogram, P, triangleIdx))
 				{
-					float z_value{};
+					//UV texture
+					Vector2 UV{};
+					//Depth
+					float z_interpolated{};
 					for (int weightIdx{}; weightIdx < 3; ++weightIdx)
 					{
 						weights[weightIdx + tIdx] = weights[weightIdx + tIdx] / a_parallelogram[triangleIdx];
-						z_value += weights[weightIdx + tIdx] * vertices_sp[weightIdx + tIdx].position.z;
+						z_interpolated += (1.f/vertices_sp[weightIdx + tIdx].position.z) * weights[weightIdx + tIdx];
+
+						UV += weights[weightIdx + tIdx] * (vertices_sp[weightIdx + tIdx].uv / vertices_sp[weightIdx + tIdx].position.z);
 					}
 
-					if (depthBuffer[px + (py * m_Width) - 1] > z_value)
+					z_interpolated = 1.f / z_interpolated;
+					//Multiplying correct depth
+					UV = UV * z_interpolated;
+
+					if (m_pDepthBufferPixels[px + (py * m_Width) - 1] > z_interpolated)
 					{
-						depthBuffer[px + (py * m_Width) - 1] = z_value;
+						m_pDepthBufferPixels[px + (py * m_Width) - 1] = z_interpolated;
 						changedColor = true;
 
-						finalColor = { vertices_sp[tIdx].color * weights[tIdx]
-							+ vertices_sp[1 + tIdx].color * weights[1 + tIdx]
-							+ vertices_sp[2 + tIdx].color * weights[2 + tIdx] };
+						finalColor = m_ptrTexture->Sample(UV);
 					}
 				}
 				
@@ -166,6 +222,9 @@ void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_
 		vertices_out[i].position.y = vertices_out[i].position.y / m_Camera.fov;
 
 		vertices_out[i].color = vertices_in[i].color;
+
+		//UV
+		vertices_out[i].uv = vertices_in[i].uv;
 	}
 }
 
@@ -220,6 +279,56 @@ void dae::Renderer::BoundingBox(const std::vector<Vertex>& vertices_in, std::vec
 		bottomRight[indexStart].x = std::clamp(int(std::max(bottomRight[indexStart].x, vertices_in[tIdx + edgeIdx].position.x)), 0, m_Width - 1);
 		bottomRight[indexStart].y = std::clamp(int(std::max(bottomRight[indexStart].y, vertices_in[tIdx + edgeIdx].position.y)), 0, m_Height - 1);
 	}
+}
+
+void dae::Renderer::IndexBuffer(std::vector<Vertex>& vertices_out, const std::vector<Mesh>& meshes_in)
+{
+	for(int meshIndex{}; meshIndex < meshes_in.size(); ++meshIndex)
+	{
+		if (meshes_in[meshIndex].primitiveTopology == PrimitiveTopology::TriangleList)
+		{
+			for(int VertexIndex{}; VertexIndex < meshes_in[meshIndex].indices.size(); ++VertexIndex)
+			{
+				int Indices{ int(meshes_in[meshIndex].indices[VertexIndex])};
+				vertices_out[VertexIndex].position = meshes_in[meshIndex].vertices[Indices].position;
+				vertices_out[VertexIndex].color = meshes_in[meshIndex].vertices[Indices].color;
+				vertices_out[VertexIndex].uv = meshes_in[meshIndex].vertices[Indices].uv;
+			}
+		}
+		else if(meshes_in[meshIndex].primitiveTopology == PrimitiveTopology::TriangleStrip)
+		{
+			for (int VertexIndex{}; VertexIndex < 12; ++VertexIndex)
+			{
+				int TriangleIndex{ VertexIndex * 3};
+				if (VertexIndex % 2 == 1)
+				{
+					//Switch vertices
+					for (int index{}; index < 3; ++index)
+					{
+						int SwitchIndex{};
+
+						if (index == 1) SwitchIndex = int(meshes_in[meshIndex].indices[VertexIndex + 2]);
+						else if (index == 2) SwitchIndex = int(meshes_in[meshIndex].indices[VertexIndex + 1]);
+						else SwitchIndex = int(meshes_in[meshIndex].indices[VertexIndex]);
+
+						vertices_out[TriangleIndex + index].position = meshes_in[meshIndex].vertices[SwitchIndex].position;
+						vertices_out[TriangleIndex + index].color = meshes_in[meshIndex].vertices[SwitchIndex].color;
+						vertices_out[TriangleIndex + index].uv = meshes_in[meshIndex].vertices[SwitchIndex].uv;
+					}
+				}
+				else
+				{
+					for(int index{}; index < 3; ++index)
+					{
+						int Indices{ int(meshes_in[meshIndex].indices[VertexIndex + index]) };
+						vertices_out[TriangleIndex + index].position = meshes_in[meshIndex].vertices[Indices].position;
+						vertices_out[TriangleIndex + index].uv = meshes_in[meshIndex].vertices[Indices].uv;
+					}
+				}
+			}
+		}
+	}
+	
 }
 
 bool Renderer::SaveBufferToImage() const
