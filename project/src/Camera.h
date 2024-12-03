@@ -30,15 +30,25 @@ namespace dae
 		float totalPitch{};
 		float totalYaw{};
 
+		//Frustum range
+		int width{};
+		int height{};
+		float nearPlane{ 0.1f };
+		float farPlane{ 1000.f };
+
 		Matrix invViewMatrix{};
 		Matrix viewMatrix{};
+		Matrix projectionMatrix{};
 
-		void Initialize(float _fovAngle = 90.f, Vector3 _origin = { 0.f,0.f,0.f })
+		void Initialize(float _fovAngle = 90.f, Vector3 _origin = { 0.f,0.f,0.f }, int Width = 0.f, int Height = 0.f)
 		{
 			fovAngle = _fovAngle;
 			fov = tanf((fovAngle * TO_RADIANS) / 2.f);
 
 			origin = _origin;
+
+			width = Width;
+			height = Height;
 		}
 
 		void CalculateViewMatrix()
@@ -69,6 +79,14 @@ namespace dae
 		void CalculateProjectionMatrix()
 		{
 			//TODO W3
+			const float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+
+			Vector4 xRow{ (1.f / (aspectRatio * fov)), 0, 0, 0};
+			Vector4 yRow{ 0, 1.f / fov, 0, 0};
+			Vector4 zRow{ 0, 0, farPlane/ (farPlane - nearPlane), 1};
+			Vector4 tRow{ 0, 0, -(farPlane * nearPlane)/(farPlane - nearPlane), 0};
+
+			projectionMatrix = Matrix(xRow, yRow, zRow, tRow);
 
 			//ProjectionMatrix => Matrix::CreatePerspectiveFovLH(...) [not implemented yet]
 			//DirectX Implementation => https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixperspectivefovlh

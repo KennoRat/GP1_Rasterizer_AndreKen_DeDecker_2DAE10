@@ -4,18 +4,25 @@
 #include "Maths.h"
 #include "DataTypes.h"
 
-#define DISABLE_OBJ
+//#define DISABLE_OBJ
 
 namespace dae
 {
 	namespace Utils
 	{
+
+		float Remap(float value, float minInput, float maxInput) 
+		{
+			float remapped = (value - minInput) / (maxInput - minInput);
+			return std::clamp(remapped, 0.0f, 1.0f);
+		}
+
 		//Just parses vertices and indices
 #pragma warning(push)
 #pragma warning(disable : 4505) //Warning unreferenced local function
 		static bool ParseOBJ(const std::string& filename, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool flipAxisAndWinding = true)
 		{
-#ifdef DISABLE_OBJ
+			#ifdef DISABLE_OBJ
 
 			//TODO: Enable the code below after uncommenting all the vertex attributes of DataTypes::Vertex
 			// >> Comment/Remove '#define DISABLE_OBJ'
@@ -73,7 +80,7 @@ namespace dae
 					//if a face is read:
 					//construct the 3 vertices, add them to the vertex array
 					//add three indices to the index array
-					//add the material index as attibute to the attribute array
+					//add the material index as attribute to the attribute array
 					//
 					// Faces or triangles
 					Vertex vertex{};
