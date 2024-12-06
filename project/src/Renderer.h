@@ -18,6 +18,11 @@ namespace dae
 	class Timer;
 	class Scene;
 
+	enum class ShadingMode
+	{
+		ObservedArea, Diffuse, Specular, Combined
+	};
+
 	class Renderer final
 	{
 	public:
@@ -35,12 +40,19 @@ namespace dae
 		bool SaveBufferToImage() const;
 
 		void VertexTransformationFunction(const std::vector<Vertex>& vertices_in, std::vector<Vertex_Out>& vertices_out) const;
-		bool TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, std::vector<float>& weights, std::vector<float>& area, const Vector2 P,const int indexStart = 0);
+		bool TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, std::vector<float>& weights,float& area, const Vector2 P,const int indexStart = 0);
 		void BoundingBox(const std::vector<Vertex_Out>& vertices_in, std::vector<Vector2>& topLeft, std::vector<Vector2>& bottomRight, const int indexStart = 0);
 		void IndexBuffer(std::vector<Vertex>& vertices_out, const std::vector<Mesh>& meshes_in);
 		bool FrustrumCulling(const std::vector<Vertex_Out>& vertices_in, const int indexStart = 0);
+		Vertex_Out InterpolateVertices(const std::vector<float>& weights, const int indexStart = 0);
+		ColorRGB PixelShading(const Vertex_Out& v);
 
+
+		//Keybinds
 		void ToggleDepthBuffer() { m_DepthColor = !m_DepthColor; };
+		void ToggleRotating() { m_IsRotating = !m_IsRotating; };
+		void ToggleNormalMap() { m_UseNormalMap = !m_UseNormalMap; };
+		void CycleShadingMode();
 
 	private:
 		SDL_Window* m_pWindow{};
@@ -54,12 +66,23 @@ namespace dae
 		Camera m_Camera{};
 
 		//Texture;
-		Texture* m_ptrTexture = Texture::LoadFromFile("resources/tuktuk.png");
+		Texture* m_ptrDiffuseTexture = Texture::LoadFromFile("resources/vehicle_diffuse.png");
+		Texture* m_ptrSpecularTexture = Texture::LoadFromFile("resources/vehicle_specular.png");
+		Texture* m_ptrNormalTexture = Texture::LoadFromFile("resources/vehicle_normal.png");
+		Texture* m_ptrGlossinessTexture = Texture::LoadFromFile("resources/vehicle_gloss.png");
 
 		Matrix m_WorldMatrix{};
+		std::vector<Mesh>		m_Meshes;
+		std::vector<Vertex>		m_vertices_world;
+		std::vector<Vertex_Out> m_vertices_sp;
 
 		int m_Width{};
 		int m_Height{};
+
+		//Keybinds
 		bool m_DepthColor{ false };
+		bool m_IsRotating{ true };
+		bool m_UseNormalMap{ true };
+		ShadingMode m_ShadingMode{ ShadingMode::Combined };
 	};
 }

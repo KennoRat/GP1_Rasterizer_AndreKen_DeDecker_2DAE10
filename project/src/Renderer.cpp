@@ -27,22 +27,47 @@ Renderer::Renderer(SDL_Window* pWindow) :
 
 
 	//Initialize Camera
-	m_Camera.Initialize(60.f, { 0.0f, 5.0f,-30.f }, m_Width, m_Height);
+	m_Camera.Initialize(45.f, { 0.0f, 0.0f, 0.0f }, m_Width, m_Height);
+
+	//Parse file
+	Mesh parseMesh{};
+	if (!Utils::ParseOBJ("resources/vehicle.obj", parseMesh.vertices, parseMesh.indices)) {
+		std::cerr << "Failed to load OBJ file!" << std::endl;
+	}
+	m_Meshes.push_back(parseMesh);
+	m_Meshes[0].worldMatrix = m_WorldMatrix;
+	m_Meshes[0].primitiveTopology = PrimitiveTopology::TriangleList;
+
+	//Reserve space
+	m_vertices_world.reserve(m_Meshes[0].vertices.size());
+	m_vertices_sp.reserve(m_vertices_world.size());
 }
 
 Renderer::~Renderer()
 {
 	delete[] m_pDepthBufferPixels;
-	delete m_ptrTexture;
+	delete m_ptrDiffuseTexture;
+	delete m_ptrSpecularTexture;
+	delete m_ptrNormalTexture;
+	delete m_ptrGlossinessTexture;
 }
 
 void Renderer::Update(Timer* pTimer)
 {
 	m_Camera.Update(pTimer);
 
-	const auto yawAngle = ((cos(pTimer->GetTotal()) + 1.f) * M_PI) + M_PI;
+	//Pos Matrix
 
-	m_WorldMatrix = Matrix::CreateRotationY(yawAngle);
+
+	//Spin Mesh
+	if(m_IsRotating)
+	{
+		Matrix Pos = Matrix::CreateTranslation(0.0f, 0.0f, 50.f);
+		const auto yawAngle = (pTimer->GetTotal() * M_PI * 0.5f);
+		Matrix Ros = Matrix::CreateRotationY(yawAngle);
+		m_WorldMatrix = Ros * Pos;
+	}
+
 }
 
 void Renderer::Render()
@@ -52,80 +77,35 @@ void Renderer::Render()
 	SDL_LockSurface(m_pBackBuffer);
 
 	//Clear Backbuffer
-	Uint32 clearColor = SDL_MapRGB(m_pBackBuffer->format, 0, 0, 0);
+	Uint32 clearColor = SDL_MapRGB(m_pBackBuffer->format, 80, 80, 80);
 	SDL_FillRect(m_pBackBuffer, NULL, clearColor);
 
 	//Depth Buffer
 	std::fill(m_pDepthBufferPixels, m_pDepthBufferPixels + m_Width * m_Height, std::numeric_limits<float>::max());
 
-	// WorldSpace
-	//std::vector<Mesh> meshes_world
-	//{
-	//	Mesh
-	//	{
-	//	{
-	//		//Vertexes
-	//		{Vector3{-3, 3, -2},   colors::White, Vector2{0.0f, 0.0f}},
-	//		{Vector3{0, 3, -2	}, colors::White, Vector2{0.5f, 0.0f}},
-	//		{Vector3{3, 3, -2	}, colors::White, Vector2{1.0f, 0.0f}},
-	//		{Vector3{-3, 0, -2	}, colors::White, Vector2{0.0f, 0.5F}},
-	//		{Vector3{0, 0, -2	}, colors::White, Vector2{0.5f, 0.5f}},
-	//		{Vector3{3, 0, -2	}, colors::White, Vector2{1.0f, 0.5f}},
-	//		{Vector3{-3, -3, -2},  colors::White, Vector2{0.0f, 1.0f}},
-	//		{Vector3{0, -3, -2	}, colors::White, Vector2{0.5f, 1.0f}},
-	//		{Vector3{3, -3, -2	}, colors::White, Vector2{1.0f, 1.0f}}
-	//	},
-	//	{
-	//		//Indices
-	//		3,0,4,1,5,2,
-	//		2,6, //degenerate triangles
-	//		6,3,7,4,8,5
-	//	},
-	//	PrimitiveTopology::TriangleStrip
-	//	}
-	//};
-
-	std::vector<Mesh> meshes_world(1);
-	if (!Utils::ParseOBJ("resources/tuktuk.obj", meshes_world[0].vertices, meshes_world[0].indices), false) {
-		std::cerr << "Failed to load OBJ file!" << std::endl;
-	}
-
 	//Index Buffer List or Strip
-	std::vector<Vertex> vertices_world{};
-	vertices_world.reserve(meshes_world[0].indices.size());
-	IndexBuffer(vertices_world, meshes_world);
+	m_vertices_world.clear();
+	IndexBuffer(m_vertices_world, m_Meshes);
 
-	//ViewSpace
-	std::vector<Vertex_Out> vertices_vp(vertices_world.size());
-	VertexTransformationFunction(vertices_world, vertices_vp);
-
-	//ScreenSpace Vertices
-	std::vector<Vertex_Out> vertices_sp(vertices_vp.size());
-	for (int i{}; i < vertices_vp.size(); i++)
-	{
-		vertices_sp[i].position.x = ((vertices_vp[i].position.x + 1) / 2.f) * float(m_Width);
-		vertices_sp[i].position.y = ((1 - vertices_vp[i].position.y) / 2.f) * float(m_Height);
-		vertices_sp[i].position.z = vertices_vp[i].position.z;
-		vertices_sp[i].position.w = vertices_vp[i].position.w;
-		vertices_sp[i].color = vertices_vp[i].color;
-		vertices_sp[i].uv = vertices_vp[i].uv;
-	}
-
-	//Bounding Boxes
-	std::vector<Vector2> topLeft(vertices_sp.size() / 3, Vector2{float(m_Width), float(m_Height)});
-	std::vector<Vector2> bottomRight(vertices_sp.size() / 3);
+	//Vertex transformation to screenspace
+	m_vertices_sp.clear();
+	VertexTransformationFunction(m_vertices_world, m_vertices_sp);
 
 	ColorRGB finalColor{};
 
+	//Bounding Boxes
+	std::vector<Vector2> topLeft(m_vertices_sp.size() / 3, Vector2{ float(m_Width), float(m_Height) });
+	std::vector<Vector2> bottomRight(m_vertices_sp.size() / 3);
+
 	//RENDER LOGIC	
-	for (int triangleIdx{}; triangleIdx < (vertices_sp.size() / 3); ++triangleIdx)
+	for (int triangleIdx{}; triangleIdx < (m_vertices_sp.size() / 3); ++triangleIdx)
 	{
 		const int tIdx{ triangleIdx * 3 };
 		//Frustrum culling
-		if (FrustrumCulling(vertices_sp, tIdx)) continue;
+		if (FrustrumCulling(m_vertices_sp, tIdx)) continue;
 
 		//Bounding Boxes
-		BoundingBox(vertices_sp, topLeft, bottomRight, triangleIdx);
+		BoundingBox(m_vertices_sp, topLeft, bottomRight, triangleIdx);
 
 		//Render Pixel
 		for (int px{ int(topLeft[triangleIdx].x) }; px < int(bottomRight[triangleIdx].x); ++px)
@@ -138,48 +118,39 @@ void Renderer::Render()
 				Vector2 P{ px + 0.5f, py + 0.5f };
 
 				//Area Of Parallelogram and Weights
-				std::vector<float> a_parallelogram(vertices_sp.size() / 3);
-				std::vector<float> weights(vertices_sp.size());
+				float a_parallelogram{};
+				std::vector<float> weights(3);
 				
 				//Triangle Hit Test and Barycentric Coordinates
-				if (TriangleHitTest(vertices_sp, weights, a_parallelogram, P, triangleIdx))
+				if (TriangleHitTest(m_vertices_sp, weights, a_parallelogram, P, triangleIdx))
 				{
-					// UV and depth interpolation
-					Vector2 UV_Numerator{};
-					float UV_Denominator = 0.f;
-
+					//depth interpolation
 					float z_Numerator = 0.f; 
 					float z_Denominator = 0.f;
 
 					for (int weightIdx = 0; weightIdx < 3; ++weightIdx) {
-						float invW = 1.f / vertices_sp[weightIdx + tIdx].position.w;
+						float invW = 1.f / m_vertices_sp[weightIdx + tIdx].position.w;
 
-						// UV Interpolation
-						UV_Numerator += weights[weightIdx + tIdx] * (vertices_sp[weightIdx + tIdx].uv * invW);
-						UV_Denominator += weights[weightIdx + tIdx] * invW;
-
-						// Depth (z) Interpolation
-						z_Numerator += weights[weightIdx + tIdx] * (vertices_sp[weightIdx + tIdx].position.z * invW);
-						z_Denominator += weights[weightIdx + tIdx] * invW;
+						//Depth (z) Interpolation
+						z_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].position.z * invW);
+						z_Denominator += weights[weightIdx] * invW;
 					}
 
-					// Final UV
-					Vector2 UV = UV_Numerator / UV_Denominator;
-
-					UV.x = std::clamp(UV.x, 0.0f, 1.0f);
-					UV.y = std::clamp(UV.y, 0.0f, 1.0f);
-
-					// Final perspective-correct depth (z)
+					//Final perspective-correct depth (z)
 					float z_interpolated = z_Numerator / z_Denominator;
 
-					z_interpolated = std::clamp(z_interpolated, 0.0f, 1.0f);
+					const int bufferIndex = px + py * m_Width;
+					float& depthBufferValue = m_pDepthBufferPixels[bufferIndex];
 
-					// Depth buffer comparison
+					//Depth buffer comparison
 					if ((z_interpolated >= 0 && z_interpolated <= 1) &&
-						(m_pDepthBufferPixels[px + (py * m_Width) - 1] > z_interpolated))
+						(depthBufferValue > z_interpolated))
 					{
-						m_pDepthBufferPixels[px + (py * m_Width) - 1] = z_interpolated;
+						depthBufferValue = z_interpolated;
 						changedColor = true;
+
+						//Interpolated Vertex
+						Vertex_Out IntVer{InterpolateVertices(weights, triangleIdx)};
 
 						if (m_DepthColor) {
 							finalColor.r = Utils::Remap(z_interpolated, 0.995f, 1.f);
@@ -187,7 +158,8 @@ void Renderer::Render()
 							finalColor.b = finalColor.r;
 						}
 						else {
-							finalColor = m_ptrTexture->Sample(UV);
+							//finalColor = m_ptrTexture->Sample(UV);
+							finalColor = PixelShading(IntVer);
 						}
 					}
 
@@ -220,46 +192,49 @@ void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_
 	const float aspectRatio = static_cast<float>(m_Width) / static_cast<float>(m_Height);
 
 	const Matrix WVPMatrix{ m_WorldMatrix * m_Camera.viewMatrix * m_Camera.projectionMatrix};
+	const float halfWidth = float(m_Width) / 2.0f;
+	const float halfHeight = float(m_Height) / 2.0f;
 
-	for (int i = 0; i < vertices_in.size(); i++)
+	for (int vertexIndex = 0; vertexIndex < vertices_in.size(); ++vertexIndex)
 	{
-		// Transform the vertex
+		//Transform the vertex
 		Vector4 transformed = WVPMatrix.TransformPoint(
-			vertices_in[i].position.x,
-			vertices_in[i].position.y,
-			vertices_in[i].position.z,
+			vertices_in[vertexIndex].position.x,
+			vertices_in[vertexIndex].position.y,
+			vertices_in[vertexIndex].position.z,
 			0);
 
-		// Perspective divide by w (not z)
+		//Perspective divide by w (not z)
 		transformed.x /= transformed.w;
 		transformed.y /= transformed.w;
 		transformed.z /= transformed.w;
 
-		// Store w for later depth calculations
-		vertices_out[i].position = { transformed.x, transformed.y, transformed.z, transformed.w };
-		vertices_out[i].color = vertices_in[i].color;
-		vertices_out[i].uv = vertices_in[i].uv;
+		//Store w for later depth calculations and transform to ScreenSpace Vertices
+		Vertex_Out sp_Vertex{ Vector4 {	(transformed.x + 1) * halfWidth,
+								(1 - transformed.y) * halfHeight,
+								transformed.z, 
+								transformed.w },
+								vertices_in[vertexIndex].color,
+								vertices_in[vertexIndex].uv,
+								Vector3{ m_WorldMatrix.TransformVector(vertices_in[vertexIndex].normal) },
+								Vector3{ m_WorldMatrix.TransformVector(vertices_in[vertexIndex].tangent) },
+								(vertices_in[vertexIndex].position - m_Camera.origin).Normalized()};
+
+		vertices_out.push_back(sp_Vertex);
 	}
 }
 
-bool dae::Renderer::TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, std::vector<float>& weights, std::vector<float>& area, const Vector2 P, const int indexStart)
+bool dae::Renderer::TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, std::vector<float>& weights, float& area, const Vector2 P, const int indexStart)
 {
-	bool pixelIsInsideTri{ false };
 	const int tIdx{ indexStart * 3 };
 
 	for (int edgeIdx{}; edgeIdx < 3; ++edgeIdx)
 	{
 		Vector3 e{};
-		if (edgeIdx == 2)
-		{
-			e = vertices_in[tIdx].position
-				- vertices_in[2 + tIdx].position;
-		}
-		else
-		{
-			e = vertices_in[edgeIdx + 1 + tIdx].position
-				- vertices_in[edgeIdx + tIdx].position;
-		}
+		int nextIdx{ (edgeIdx + 1) % 3 };
+
+		e = vertices_in[nextIdx + tIdx].position
+			- vertices_in[edgeIdx + tIdx].position;
 
 		Vector2 pV{ P.x - vertices_in[edgeIdx + tIdx].position.x,
 			P.y - vertices_in[edgeIdx + tIdx].position.y };
@@ -267,19 +242,17 @@ bool dae::Renderer::TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, 
 		float result{ Vector2::Cross(Vector2{ e.x, e.y }, pV) };
 		if (result < 0)
 		{
-			pixelIsInsideTri = false;
-			break;
+			return false;
 		}
 		else
 		{
-			if (edgeIdx == 1) weights[tIdx] = result;
-			else if (edgeIdx == 2) weights[1 + tIdx] = result;
-			else weights[2 + tIdx] = result;
-			area[indexStart] += result;
-			pixelIsInsideTri = true;
+			if (edgeIdx == 1) weights[0] = result;
+			else if (edgeIdx == 2) weights[1] = result;
+			else weights[2] = result;
+			area += result;
 		}
 	}
-	return pixelIsInsideTri;
+	return true;
 }
 
 void dae::Renderer::BoundingBox(const std::vector<Vertex_Out>& vertices_in, std::vector<Vector2>& topLeft, std::vector<Vector2>& bottomRight, const int indexStart)
@@ -303,7 +276,7 @@ void dae::Renderer::IndexBuffer(std::vector<Vertex>& vertices_out, const std::ve
 	{
 		const auto& mesh = meshes_in[meshIndex];
 
-		// Check if there's enough data
+		//Check if there's enough data
 		if (mesh.indices.size() < 3) continue;
 
 		if (mesh.primitiveTopology == PrimitiveTopology::TriangleList)
@@ -356,7 +329,7 @@ bool dae::Renderer::FrustrumCulling(const std::vector<Vertex_Out>& vertices_in, 
 	for (int i = 0; i < 3; ++i) {
 		const auto& vertex = vertices_in[i + indexStart];
 
-		// Check if the vertex is outside the clip
+		//Check if the vertex is outside the clip
 		if ((vertex.position.x >= 0.0f && vertex.position.x <= float(m_Width) &&
 			vertex.position.y >= 0.0f && vertex.position.y <= float(m_Height) &&
 			vertex.position.z >= 0.0f && vertex.position.z <= 1.0f) == false) {
@@ -365,6 +338,138 @@ bool dae::Renderer::FrustrumCulling(const std::vector<Vertex_Out>& vertices_in, 
 	}
 
 	return false;
+}
+
+Vertex_Out dae::Renderer::InterpolateVertices(const std::vector<float>& weights, const int indexStart)
+{
+	const int tIdx{ indexStart * 3 };
+	Vertex_Out vertex{};
+
+	//Interpolate attributes
+	Vector2 UV_Numerator{};
+	ColorRGB Color_Numerator{};
+	Vector3 Normal_Numerator, Tangent_Numerator, Position_Numerator, ViewDirection_Numerator{};
+	float Denominator{};
+
+	for (int weightIdx = 0; weightIdx < 3; ++weightIdx) {
+		float invW = 1.f / m_vertices_sp[weightIdx + tIdx].position.w;
+
+		UV_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].uv * invW);
+
+		Color_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].color * invW);
+
+		Normal_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].normal * invW);
+
+		Tangent_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].tangent * invW);
+
+		Position_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].position * invW);
+
+		ViewDirection_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].viewDirection * invW);
+
+		Denominator += weights[weightIdx] * invW;
+	}
+
+	//Final
+	vertex.uv = UV_Numerator / Denominator;
+	vertex.uv.x = std::clamp(vertex.uv.x, 0.0f, 1.0f);
+	vertex.uv.y = std::clamp(vertex.uv.y, 0.0f, 1.0f);
+
+	vertex.color = Color_Numerator / Denominator;
+
+	vertex.normal = Normal_Numerator / Denominator;
+	vertex.normal.Normalize();
+
+	vertex.tangent = Tangent_Numerator / Denominator;
+	vertex.tangent.Normalize();
+
+	Vector3 tempPosition{ Position_Numerator / Denominator };
+	vertex.position = Vector4{ tempPosition.x, tempPosition.y, tempPosition.z, 0.f};
+
+	vertex.viewDirection = ViewDirection_Numerator / Denominator;
+	vertex.viewDirection.Normalize();
+	
+	return vertex;
+}
+
+ColorRGB dae::Renderer::PixelShading(const Vertex_Out& v)
+{
+	//Ambient
+	ColorRGB Ambient{0.025f, 0.025f, 0.025f };
+
+	//Light
+	Vector3 lightDirection{0.577f, -0.577f, 0.577f};
+
+	//Normal
+	Vector3 nVector{v.normal};
+
+	if(m_UseNormalMap)
+	{
+		//Sample normal
+		ColorRGB normalColor{ m_ptrNormalTexture->Sample(v.uv) };
+		nVector = Vector3{ normalColor.r, normalColor.g, normalColor.b };
+
+		//Remap from [0,255] to [0,1]
+		nVector = (2.f * nVector) - Vector3{ 1.f, 1.f, 1.f };
+
+		//Transform to world space
+		Vector3 binormal{ Vector3::Cross(v.normal, v.tangent) };
+		Matrix tangentSpaceAxis{ v.tangent, binormal, v.normal, Vector3::Zero };
+		nVector = tangentSpaceAxis.TransformVector(nVector);
+	}
+
+
+	//Lambert
+	float lambertsLaw{ Vector3::Dot(nVector, -lightDirection) };
+
+	if(lambertsLaw > 0)
+	{
+		//Sample Diffuse
+		float lightIntensity{ 7.f };
+		ColorRGB Diffuse{ (lightIntensity * m_ptrDiffuseTexture->Sample(v.uv)) / M_PI };
+
+		//Phong
+		float shininess{ 25.f };
+		Vector3 reflect{ lightDirection - (2 * (Vector3::Dot(nVector,lightDirection)) * nVector) };
+		float cosAngle{ std::max(0.f, Vector3::Dot(reflect, v.viewDirection)) };
+		ColorRGB Specular{ m_ptrSpecularTexture->Sample(v.uv) * powf(cosAngle, m_ptrGlossinessTexture->Sample(v.uv).r * shininess) };
+
+		switch (m_ShadingMode)
+		{
+		case dae::ShadingMode::ObservedArea:
+			return ColorRGB{ lambertsLaw, lambertsLaw , lambertsLaw };
+			break;
+		case dae::ShadingMode::Diffuse:
+			return Diffuse;
+			break;
+		case dae::ShadingMode::Specular:
+			return Specular;
+			break;
+		case dae::ShadingMode::Combined:
+			return Diffuse * lambertsLaw + Specular + Ambient;
+			break;
+		}
+	}
+	
+	return { Ambient };
+}
+
+void dae::Renderer::CycleShadingMode()
+{
+	switch (m_ShadingMode)
+	{
+	case ShadingMode::ObservedArea:
+		m_ShadingMode = ShadingMode::Diffuse;
+		break;
+	case ShadingMode::Diffuse:
+		m_ShadingMode = ShadingMode::Specular;
+		break;
+	case ShadingMode::Specular:
+		m_ShadingMode = ShadingMode::Combined;
+		break;
+	case ShadingMode::Combined:
+		m_ShadingMode = ShadingMode::ObservedArea;
+		break;
+	}
 }
 
 bool Renderer::SaveBufferToImage() const
