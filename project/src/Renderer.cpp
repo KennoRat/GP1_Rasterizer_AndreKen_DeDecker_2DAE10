@@ -9,6 +9,7 @@
 #include "Utils.h"
 #include "vector"
 #include "iostream"
+#include <execution>
 
 using namespace dae;
 
@@ -39,8 +40,10 @@ Renderer::Renderer(SDL_Window* pWindow) :
 	m_Meshes[0].primitiveTopology = PrimitiveTopology::TriangleList;
 
 	//Reserve space
-	m_vertices_world.reserve(m_Meshes[0].vertices.size());
-	m_vertices_sp.reserve(m_vertices_world.size());
+	m_VerticesWorld.reserve(m_Meshes[0].vertices.size());
+	m_VerticesSP.reserve(m_VerticesWorld.size());
+
+	m_AmountOfTriangles = m_Meshes[0].vertices.size() / 3;
 }
 
 Renderer::~Renderer()
@@ -56,15 +59,12 @@ void Renderer::Update(Timer* pTimer)
 {
 	m_Camera.Update(pTimer);
 
-	//Pos Matrix
-
-
 	//Spin Mesh
 	if(m_IsRotating)
 	{
 		Matrix Pos = Matrix::CreateTranslation(0.0f, 0.0f, 50.f);
-		const auto yawAngle = (pTimer->GetTotal() * M_PI * 0.5f);
-		Matrix Ros = Matrix::CreateRotationY(yawAngle);
+		m_YawAngle += (pTimer->GetElapsed() * M_PI * 0.5f);
+		Matrix Ros = Matrix::CreateRotationY(m_YawAngle);
 		m_WorldMatrix = Ros * Pos;
 	}
 
@@ -81,103 +81,45 @@ void Renderer::Render()
 	SDL_FillRect(m_pBackBuffer, NULL, clearColor);
 
 	//Depth Buffer
-	std::fill(m_pDepthBufferPixels, m_pDepthBufferPixels + m_Width * m_Height, std::numeric_limits<float>::max());
+	for (int index{}; index < (m_Width * m_Height); ++index) m_pDepthBufferPixels[index] = std::numeric_limits<float>::max();
 
 	//Index Buffer List or Strip
-	m_vertices_world.clear();
-	IndexBuffer(m_vertices_world, m_Meshes);
+	m_VerticesWorld.clear();
+	IndexBuffer(m_VerticesWorld, m_Meshes);
 
 	//Vertex transformation to screenspace
-	m_vertices_sp.clear();
-	VertexTransformationFunction(m_vertices_world, m_vertices_sp);
+	m_VerticesSP.clear();
+	VertexTransformationFunction(m_VerticesWorld, m_VerticesSP);
 
 	ColorRGB finalColor{};
 
 	//Bounding Boxes
-	std::vector<Vector2> topLeft(m_vertices_sp.size() / 3, Vector2{ float(m_Width), float(m_Height) });
-	std::vector<Vector2> bottomRight(m_vertices_sp.size() / 3);
+	std::vector<Vector2> topLeft(m_AmountOfTriangles, Vector2{ float(m_Width), float(m_Height) });
+	std::vector<Vector2> bottomRight(m_AmountOfTriangles);
 
 	//RENDER LOGIC	
-	for (int triangleIdx{}; triangleIdx < (m_vertices_sp.size() / 3); ++triangleIdx)
+	std::vector<uint32_t> triangleIndices{};
+	triangleIndices.reserve(m_AmountOfTriangles);
+	for (uint32_t index{}; index < m_AmountOfTriangles; ++index) triangleIndices.emplace_back(index);
+
+	std::for_each(std::execution::seq, triangleIndices.begin(), triangleIndices.end(), [&](int triangleIdx)
 	{
-		const int tIdx{ triangleIdx * 3 };
-		//Frustrum culling
-		if (FrustrumCulling(m_vertices_sp, tIdx)) continue;
+			const int tIdx{ triangleIdx * 3 };
 
-		//Bounding Boxes
-		BoundingBox(m_vertices_sp, topLeft, bottomRight, triangleIdx);
+			// Frustum Culling
+			if (FrustrumCulling(m_VerticesSP, tIdx)) return;
 
-		//Render Pixel
-		for (int px{ int(topLeft[triangleIdx].x) }; px < int(bottomRight[triangleIdx].x); ++px)
-		{
-			for (int py{ int(topLeft[triangleIdx].y) }; py < int(bottomRight[triangleIdx].y); ++py)
+			// Bounding Box Calculation
+			BoundingBox(m_VerticesSP, topLeft, bottomRight, triangleIdx);
+
+			for (int px = int(topLeft[triangleIdx].x); px < int(bottomRight[triangleIdx].x); ++px)
 			{
-				bool changedColor{ false };
-
-				//Pixel
-				Vector2 P{ px + 0.5f, py + 0.5f };
-
-				//Area Of Parallelogram and Weights
-				float a_parallelogram{};
-				std::vector<float> weights(3);
-				
-				//Triangle Hit Test and Barycentric Coordinates
-				if (TriangleHitTest(m_vertices_sp, weights, a_parallelogram, P, triangleIdx))
+				for (int py = int(topLeft[triangleIdx].y); py < int(bottomRight[triangleIdx].y); ++py)
 				{
-					//depth interpolation
-					float z_Numerator = 0.f; 
-					float z_Denominator = 0.f;
-
-					for (int weightIdx = 0; weightIdx < 3; ++weightIdx) {
-						float invW = 1.f / m_vertices_sp[weightIdx + tIdx].position.w;
-
-						//Depth (z) Interpolation
-						z_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].position.z * invW);
-						z_Denominator += weights[weightIdx] * invW;
-					}
-
-					//Final perspective-correct depth (z)
-					float z_interpolated = z_Numerator / z_Denominator;
-
-					const int bufferIndex = px + py * m_Width;
-					float& depthBufferValue = m_pDepthBufferPixels[bufferIndex];
-
-					//Depth buffer comparison
-					if ((z_interpolated >= 0 && z_interpolated <= 1) &&
-						(depthBufferValue > z_interpolated))
-					{
-						depthBufferValue = z_interpolated;
-						changedColor = true;
-
-						//Interpolated Vertex
-						Vertex_Out IntVer{InterpolateVertices(weights, triangleIdx)};
-
-						if (m_DepthColor) {
-							finalColor.r = Utils::Remap(z_interpolated, 0.995f, 1.f);
-							finalColor.g = finalColor.r;
-							finalColor.b = finalColor.r;
-						}
-						else {
-							//finalColor = m_ptrTexture->Sample(UV);
-							finalColor = PixelShading(IntVer);
-						}
-					}
-
-				}
-				
-				//Update Color in Buffer
-				if(changedColor)
-				{
-					finalColor.MaxToOne();
-
-					m_pBackBufferPixels[px + (py * m_Width)] = SDL_MapRGB(m_pBackBuffer->format,
-						static_cast<uint8_t>(finalColor.r * 255),
-						static_cast<uint8_t>(finalColor.g * 255),
-						static_cast<uint8_t>(finalColor.b * 255));
+					RenderPixel(finalColor, px, py, triangleIdx);
 				}
 			}
-		}
-	}
+	});
 
 	//@END
 	//Update SDL Surface
@@ -261,10 +203,10 @@ void dae::Renderer::BoundingBox(const std::vector<Vertex_Out>& vertices_in, std:
 
 	for (int edgeIdx{}; edgeIdx < 3; ++edgeIdx)
 	{
-		topLeft[indexStart].x = std::clamp(int(std::min(topLeft[indexStart].x, vertices_in[tIdx + edgeIdx].position.x)), 0, m_Width - 1);
-		topLeft[indexStart].y = std::clamp(int(std::min(topLeft[indexStart].y, vertices_in[tIdx + edgeIdx].position.y)), 0, m_Height - 1);
-		bottomRight[indexStart].x = std::clamp(int(std::max(bottomRight[indexStart].x, vertices_in[tIdx + edgeIdx].position.x)), 0, m_Width - 1);
-		bottomRight[indexStart].y = std::clamp(int(std::max(bottomRight[indexStart].y, vertices_in[tIdx + edgeIdx].position.y)), 0, m_Height - 1);
+		topLeft[indexStart].x = std::clamp(std::min(topLeft[indexStart].x, vertices_in[tIdx + edgeIdx].position.x), 0.0f, float(m_Width));
+		topLeft[indexStart].y = std::clamp(std::min(topLeft[indexStart].y, vertices_in[tIdx + edgeIdx].position.y), 0.0f, float(m_Height));
+		bottomRight[indexStart].x = std::clamp(std::max(bottomRight[indexStart].x, vertices_in[tIdx + edgeIdx].position.x), 0.0f, float(m_Width));
+		bottomRight[indexStart].y = std::clamp(std::max(bottomRight[indexStart].y, vertices_in[tIdx + edgeIdx].position.y), 0.0f, float(m_Height));
 	}
 }
 
@@ -330,8 +272,8 @@ bool dae::Renderer::FrustrumCulling(const std::vector<Vertex_Out>& vertices_in, 
 		const auto& vertex = vertices_in[i + indexStart];
 
 		//Check if the vertex is outside the clip
-		if ((vertex.position.x >= 0.0f && vertex.position.x <= float(m_Width) &&
-			vertex.position.y >= 0.0f && vertex.position.y <= float(m_Height) &&
+		if ((vertex.position.x >= 0.0f && vertex.position.x <= m_Width &&
+			vertex.position.y >= 0.0f && vertex.position.y <= m_Height &&
 			vertex.position.z >= 0.0f && vertex.position.z <= 1.0f) == false) {
 			return true;
 		}
@@ -352,19 +294,19 @@ Vertex_Out dae::Renderer::InterpolateVertices(const std::vector<float>& weights,
 	float Denominator{};
 
 	for (int weightIdx = 0; weightIdx < 3; ++weightIdx) {
-		float invW = 1.f / m_vertices_sp[weightIdx + tIdx].position.w;
+		float invW = 1.f / m_VerticesSP[weightIdx + tIdx].position.w;
 
-		UV_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].uv * invW);
+		UV_Numerator += weights[weightIdx] * (m_VerticesSP[weightIdx + tIdx].uv * invW);
 
-		Color_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].color * invW);
+		Color_Numerator += weights[weightIdx] * (m_VerticesSP[weightIdx + tIdx].color * invW);
 
-		Normal_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].normal * invW);
+		Normal_Numerator += weights[weightIdx] * (m_VerticesSP[weightIdx + tIdx].normal * invW);
 
-		Tangent_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].tangent * invW);
+		Tangent_Numerator += weights[weightIdx] * (m_VerticesSP[weightIdx + tIdx].tangent * invW);
 
-		Position_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].position * invW);
+		Position_Numerator += weights[weightIdx] * (m_VerticesSP[weightIdx + tIdx].position * invW);
 
-		ViewDirection_Numerator += weights[weightIdx] * (m_vertices_sp[weightIdx + tIdx].viewDirection * invW);
+		ViewDirection_Numerator += weights[weightIdx] * (m_VerticesSP[weightIdx + tIdx].viewDirection * invW);
 
 		Denominator += weights[weightIdx] * invW;
 	}
@@ -469,6 +411,74 @@ void dae::Renderer::CycleShadingMode()
 	case ShadingMode::Combined:
 		m_ShadingMode = ShadingMode::ObservedArea;
 		break;
+	}
+}
+
+void dae::Renderer::RenderPixel(ColorRGB& finalColor, int px, int py, int triangleIdx)
+{
+	bool changedColor{ false };
+	const int tIdx{ triangleIdx * 3 };
+
+	//Pixel
+	Vector2 P{ px + 0.5f, py + 0.5f };
+
+	//Area Of Parallelogram and Weights
+	float a_parallelogram{};
+	std::vector<float> weights(3);
+
+	//Triangle Hit Test and Barycentric Coordinates
+	if (TriangleHitTest(m_VerticesSP, weights, a_parallelogram, P, triangleIdx))
+	{
+		//depth interpolation
+		float z_Numerator = 0.f;
+		float z_Denominator = 0.f;
+
+		for (int weightIdx = 0; weightIdx < 3; ++weightIdx) {
+			float invW = 1.f / m_VerticesSP[weightIdx + tIdx].position.w;
+
+			//Depth (z) Interpolation
+			z_Numerator += weights[weightIdx] * (m_VerticesSP[weightIdx + tIdx].position.z * invW);
+			z_Denominator += weights[weightIdx] * invW;
+		}
+
+		//Final perspective-correct depth (z)
+		float z_interpolated = z_Numerator / z_Denominator;
+
+		const int bufferIndex = px + py * m_Width;
+		float& depthBufferValue = m_pDepthBufferPixels[bufferIndex];
+
+		//Depth buffer comparison
+		if ((z_interpolated >= 0 && z_interpolated <= 1) &&
+			(depthBufferValue > z_interpolated))
+		{
+			depthBufferValue = z_interpolated;
+			changedColor = true;
+
+			//Interpolated Vertex
+			Vertex_Out IntVer{ InterpolateVertices(weights, triangleIdx) };
+
+			if (m_DepthColor) {
+				finalColor.r = Utils::Remap(z_interpolated, 0.995f, 1.f);
+				finalColor.g = finalColor.r;
+				finalColor.b = finalColor.r;
+			}
+			else {
+				//finalColor = m_ptrTexture->Sample(UV);
+				finalColor = PixelShading(IntVer);
+			}
+		}
+
+	}
+
+	//Update Color in Buffer
+	if (changedColor)
+	{
+		finalColor.MaxToOne();
+
+		m_pBackBufferPixels[px + (py * m_Width)] = SDL_MapRGB(m_pBackBuffer->format,
+			static_cast<uint8_t>(finalColor.r * 255),
+			static_cast<uint8_t>(finalColor.g * 255),
+			static_cast<uint8_t>(finalColor.b * 255));
 	}
 }
 

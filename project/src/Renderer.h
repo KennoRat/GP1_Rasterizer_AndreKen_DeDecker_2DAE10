@@ -46,6 +46,7 @@ namespace dae
 		bool FrustrumCulling(const std::vector<Vertex_Out>& vertices_in, const int indexStart = 0);
 		Vertex_Out InterpolateVertices(const std::vector<float>& weights, const int indexStart = 0);
 		ColorRGB PixelShading(const Vertex_Out& v);
+		void RenderPixel(ColorRGB& finalColor, int px, int py, int tiangleIdx = 0 );
 
 
 		//Keybinds
@@ -73,16 +74,19 @@ namespace dae
 
 		Matrix m_WorldMatrix{};
 		std::vector<Mesh>		m_Meshes;
-		std::vector<Vertex>		m_vertices_world;
-		std::vector<Vertex_Out> m_vertices_sp;
+		std::vector<Vertex>		m_VerticesWorld;
+		std::vector<Vertex_Out> m_VerticesSP;
 
 		int m_Width{};
 		int m_Height{};
+		int m_AmountOfTriangles{};
+		float m_YawAngle{};
 
 		//Keybinds
 		bool m_DepthColor{ false };
 		bool m_IsRotating{ true };
 		bool m_UseNormalMap{ true };
+		bool m_UseParallelThreading{ true };
 		ShadingMode m_ShadingMode{ ShadingMode::Combined };
 	};
 }
