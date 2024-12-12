@@ -9,7 +9,6 @@
 #include "Utils.h"
 #include "vector"
 #include "iostream"
-#include <execution>
 
 using namespace dae;
 
@@ -25,7 +24,8 @@ Renderer::Renderer(SDL_Window* pWindow) :
 	m_pBackBufferPixels = (uint32_t*)m_pBackBuffer->pixels;
 
 	m_pDepthBufferPixels = new float[m_Width * m_Height];
-
+	m_HalfWidth = float(m_Width) / 2.0f;
+	m_HalfHeight = float(m_Height) / 2.0f;
 
 	//Initialize Camera
 	m_Camera.Initialize(45.f, { 0.0f, 0.0f, 0.0f }, m_Width, m_Height);
@@ -41,7 +41,7 @@ Renderer::Renderer(SDL_Window* pWindow) :
 
 	//Reserve space
 	m_VerticesWorld.reserve(m_Meshes[0].vertices.size());
-	m_VerticesSP.reserve(m_VerticesWorld.size());
+	m_VerticesSP.reserve(m_Meshes[0].vertices.size());
 
 	m_AmountOfTriangles = m_Meshes[0].vertices.size() / 3;
 }
@@ -81,10 +81,9 @@ void Renderer::Render()
 	SDL_FillRect(m_pBackBuffer, NULL, clearColor);
 
 	//Depth Buffer
-	for (int index{}; index < (m_Width * m_Height); ++index) m_pDepthBufferPixels[index] = std::numeric_limits<float>::max();
+	std::fill(m_pDepthBufferPixels, m_pDepthBufferPixels + (m_Width * m_Height), std::numeric_limits<float>::max());
 
 	//Index Buffer List or Strip
-	m_VerticesWorld.clear();
 	IndexBuffer(m_VerticesWorld, m_Meshes);
 
 	//Vertex transformation to screenspace
@@ -93,33 +92,29 @@ void Renderer::Render()
 
 	ColorRGB finalColor{};
 
-	//Bounding Boxes
-	std::vector<Vector2> topLeft(m_AmountOfTriangles, Vector2{ float(m_Width), float(m_Height) });
-	std::vector<Vector2> bottomRight(m_AmountOfTriangles);
-
 	//RENDER LOGIC	
-	std::vector<uint32_t> triangleIndices{};
-	triangleIndices.reserve(m_AmountOfTriangles);
-	for (uint32_t index{}; index < m_AmountOfTriangles; ++index) triangleIndices.emplace_back(index);
-
-	std::for_each(std::execution::seq, triangleIndices.begin(), triangleIndices.end(), [&](int triangleIdx)
+	for(uint32_t triangleIdx{}; triangleIdx < m_AmountOfTriangles; ++triangleIdx)
 	{
-			const int tIdx{ triangleIdx * 3 };
+		const uint32_t tIdx{ triangleIdx * 3 };
 
-			// Frustum Culling
-			if (FrustrumCulling(m_VerticesSP, tIdx)) return;
+		//Bounding Boxes
+		Vector2 topLeft{ Vector2{ float(m_Width), float(m_Height)} };
+		Vector2 bottomRight{};
 
-			// Bounding Box Calculation
-			BoundingBox(m_VerticesSP, topLeft, bottomRight, triangleIdx);
+		// Frustum Culling
+		if (FrustrumCulling(m_VerticesSP, tIdx)) return;
 
-			for (int px = int(topLeft[triangleIdx].x); px < int(bottomRight[triangleIdx].x); ++px)
+		// Bounding Box Calculation
+		BoundingBox(m_VerticesSP, topLeft, bottomRight, triangleIdx);
+
+		for (int px = int(topLeft.x); px < int(bottomRight.x); ++px)
+		{
+			for (int py = int(topLeft.y); py < int(bottomRight.y); ++py)
 			{
-				for (int py = int(topLeft[triangleIdx].y); py < int(bottomRight[triangleIdx].y); ++py)
-				{
-					RenderPixel(finalColor, px, py, triangleIdx);
-				}
+				RenderPixel(finalColor, px, py, triangleIdx);
 			}
-	});
+		}
+	}
 
 	//@END
 	//Update SDL Surface
@@ -131,11 +126,9 @@ void Renderer::Render()
 void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_in, std::vector<Vertex_Out>& vertices_out) const
 {
 	//Todo > W1 Projection Stage
-	const float aspectRatio = static_cast<float>(m_Width) / static_cast<float>(m_Height);
-
 	const Matrix WVPMatrix{ m_WorldMatrix * m_Camera.viewMatrix * m_Camera.projectionMatrix};
-	const float halfWidth = float(m_Width) / 2.0f;
-	const float halfHeight = float(m_Height) / 2.0f;
+
+	vertices_out.reserve(vertices_in.size());
 
 	for (int vertexIndex = 0; vertexIndex < vertices_in.size(); ++vertexIndex)
 	{
@@ -152,8 +145,8 @@ void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_
 		transformed.z /= transformed.w;
 
 		//Store w for later depth calculations and transform to ScreenSpace Vertices
-		Vertex_Out sp_Vertex{ Vector4 {	(transformed.x + 1) * halfWidth,
-								(1 - transformed.y) * halfHeight,
+		Vertex_Out sp_Vertex{ Vector4 {	(transformed.x + 1) * m_HalfWidth,
+								(1 - transformed.y) * m_HalfHeight,
 								transformed.z, 
 								transformed.w },
 								vertices_in[vertexIndex].color,
@@ -162,17 +155,17 @@ void Renderer::VertexTransformationFunction(const std::vector<Vertex>& vertices_
 								Vector3{ m_WorldMatrix.TransformVector(vertices_in[vertexIndex].tangent) },
 								(vertices_in[vertexIndex].position - m_Camera.origin).Normalized()};
 
-		vertices_out.push_back(sp_Vertex);
+		vertices_out.push_back(std::move(sp_Vertex));
 	}
 }
 
 bool dae::Renderer::TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, std::vector<float>& weights, float& area, const Vector2 P, const int indexStart)
 {
 	const int tIdx{ indexStart * 3 };
+	Vector3 e{};
 
 	for (int edgeIdx{}; edgeIdx < 3; ++edgeIdx)
 	{
-		Vector3 e{};
 		int nextIdx{ (edgeIdx + 1) % 3 };
 
 		e = vertices_in[nextIdx + tIdx].position
@@ -197,39 +190,35 @@ bool dae::Renderer::TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, 
 	return true;
 }
 
-void dae::Renderer::BoundingBox(const std::vector<Vertex_Out>& vertices_in, std::vector<Vector2>& topLeft, std::vector<Vector2>& bottomRight, const int indexStart)
+void dae::Renderer::BoundingBox(const std::vector<Vertex_Out>& vertices_in, Vector2& topLeft, Vector2& bottomRight, const int indexStart)
 {
 	const int tIdx{ indexStart * 3 };
 
 	for (int edgeIdx{}; edgeIdx < 3; ++edgeIdx)
 	{
-		topLeft[indexStart].x = std::clamp(std::min(topLeft[indexStart].x, vertices_in[tIdx + edgeIdx].position.x), 0.0f, float(m_Width));
-		topLeft[indexStart].y = std::clamp(std::min(topLeft[indexStart].y, vertices_in[tIdx + edgeIdx].position.y), 0.0f, float(m_Height));
-		bottomRight[indexStart].x = std::clamp(std::max(bottomRight[indexStart].x, vertices_in[tIdx + edgeIdx].position.x), 0.0f, float(m_Width));
-		bottomRight[indexStart].y = std::clamp(std::max(bottomRight[indexStart].y, vertices_in[tIdx + edgeIdx].position.y), 0.0f, float(m_Height));
+		topLeft.x = std::clamp(std::min(topLeft.x, vertices_in[tIdx + edgeIdx].position.x), 0.0f, float(m_Width));
+		topLeft.y = std::clamp(std::min(topLeft.y, vertices_in[tIdx + edgeIdx].position.y), 0.0f, float(m_Height));
+		bottomRight.x = std::clamp(std::max(bottomRight.x, vertices_in[tIdx + edgeIdx].position.x), 0.0f, float(m_Width));
+		bottomRight.y = std::clamp(std::max(bottomRight.y, vertices_in[tIdx + edgeIdx].position.y), 0.0f, float(m_Height));
 	}
 }
 
 void dae::Renderer::IndexBuffer(std::vector<Vertex>& vertices_out, const std::vector<Mesh>& meshes_in)
 {
 	vertices_out.clear();
+	vertices_out.reserve(meshes_in[0].indices.size());
+
 
 	for (size_t meshIndex = 0; meshIndex < meshes_in.size(); ++meshIndex)
 	{
 		const auto& mesh = meshes_in[meshIndex];
-
-		//Check if there's enough data
-		if (mesh.indices.size() < 3) continue;
 
 		if (mesh.primitiveTopology == PrimitiveTopology::TriangleList)
 		{
 			for (size_t vertexIndex = 0; vertexIndex < mesh.indices.size(); ++vertexIndex)
 			{
 				int index = static_cast<int>(mesh.indices[vertexIndex]);
-				if (index >= 0 && index < mesh.vertices.size())
-				{
-					vertices_out.push_back(mesh.vertices[index]);
-				}
+				vertices_out.push_back(mesh.vertices[index]);
 			}
 		}
 		else if (mesh.primitiveTopology == PrimitiveTopology::TriangleStrip)
@@ -247,17 +236,14 @@ void dae::Renderer::IndexBuffer(std::vector<Vertex>& vertices_out, const std::ve
 					for (size_t index = 0; index < 3; ++index)
 					{
 						int i = static_cast<int>(mesh.indices[vertexIndex + index]);
-						if (i >= 0 && i < mesh.vertices.size())
-						{
-							vertices_out.push_back(mesh.vertices[i]);
-						}
+						vertices_out.push_back(mesh.vertices[i]);
 					}
 				}
 			}
 		}
 		else
 		{
-			for (size_t vertexIndex = 0; vertexIndex < mesh.indices.size() - 2; ++vertexIndex)
+			for (size_t vertexIndex = 0; vertexIndex < mesh.indices.size() - 1; ++vertexIndex)
 			{
 				vertices_out.push_back(mesh.vertices[vertexIndex]);
 			}
@@ -445,13 +431,12 @@ void dae::Renderer::RenderPixel(ColorRGB& finalColor, int px, int py, int triang
 		float z_interpolated = z_Numerator / z_Denominator;
 
 		const int bufferIndex = px + py * m_Width;
-		float& depthBufferValue = m_pDepthBufferPixels[bufferIndex];
 
 		//Depth buffer comparison
 		if ((z_interpolated >= 0 && z_interpolated <= 1) &&
-			(depthBufferValue > z_interpolated))
+			(m_pDepthBufferPixels[bufferIndex] > z_interpolated))
 		{
-			depthBufferValue = z_interpolated;
+			m_pDepthBufferPixels[bufferIndex] = z_interpolated;
 			changedColor = true;
 
 			//Interpolated Vertex

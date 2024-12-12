@@ -41,9 +41,9 @@ namespace dae
 
 		void VertexTransformationFunction(const std::vector<Vertex>& vertices_in, std::vector<Vertex_Out>& vertices_out) const;
 		bool TriangleHitTest(const std::vector<Vertex_Out>& vertices_in, std::vector<float>& weights,float& area, const Vector2 P,const int indexStart = 0);
-		void BoundingBox(const std::vector<Vertex_Out>& vertices_in, std::vector<Vector2>& topLeft, std::vector<Vector2>& bottomRight, const int indexStart = 0);
+		void BoundingBox(const std::vector<Vertex_Out>& vertices_in, Vector2& topLeft, Vector2& bottomRight, const int indexStart = 0);
 		void IndexBuffer(std::vector<Vertex>& vertices_out, const std::vector<Mesh>& meshes_in);
-		bool FrustrumCulling(const std::vector<Vertex_Out>& vertices_in, const int indexStart = 0);
+		inline bool FrustrumCulling(const std::vector<Vertex_Out>& vertices_in, const int indexStart = 0);
 		Vertex_Out InterpolateVertices(const std::vector<float>& weights, const int indexStart = 0);
 		ColorRGB PixelShading(const Vertex_Out& v);
 		void RenderPixel(ColorRGB& finalColor, int px, int py, int tiangleIdx = 0 );
@@ -81,6 +81,8 @@ namespace dae
 		int m_Height{};
 		int m_AmountOfTriangles{};
 		float m_YawAngle{};
+		float m_HalfWidth{};
+		float m_HalfHeight{};
 
 		//Keybinds
 		bool m_DepthColor{ false };
